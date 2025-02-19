@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35806.99 d17.13
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XOR_CUDA_Unpacking_C", "XOR_CUDA_Unpacking_C.vcxproj", "{7EDBC914-D8FB-E403-B9E7-10C70AC170B0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7EDBC914-D8FB-E403-B9E7-10C70AC170B0}.Debug|x64.ActiveCfg = Debug|x64
+		{7EDBC914-D8FB-E403-B9E7-10C70AC170B0}.Debug|x64.Build.0 = Debug|x64
+		{7EDBC914-D8FB-E403-B9E7-10C70AC170B0}.Release|x64.ActiveCfg = Release|x64
+		{7EDBC914-D8FB-E403-B9E7-10C70AC170B0}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D71E099C-8CEB-4DED-9D07-C65E4AA80210}
+	EndGlobalSection
+EndGlobal
