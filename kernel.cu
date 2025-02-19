@@ -3,8 +3,10 @@
 #include <chrono>
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
+#define MAX_SHELLCODE 10000000 // EDIT WITH THE SIZE OF YOUR SHELLCODE
+unsigned char file_data[MAX_SHELLCODE] = "ST_ART_HE_R_E";
 
-char* readFile(const char* file_path, long* file_size) {
+unsigned char* readFile(const char* file_path, long* file_size) {
     FILE* file = fopen(file_path, "r");
     if (file == NULL) {
         perror("Error opening file");
@@ -15,7 +17,7 @@ char* readFile(const char* file_path, long* file_size) {
     *file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    char* file_data = (char*)malloc(*file_size + 1);
+    unsigned char* file_data = (unsigned char*)malloc(*file_size + 1);
     if (file_data == NULL) {
         perror("Error allocating memory");
         fclose(file);
@@ -34,7 +36,7 @@ __global__ void xor (char* file_data_xored, char* file_data) {
     file_data_xored[x] = file_data[x] ^ 0x43;
 }
 
-cudaError_t xor_with_cuda(char* file_data_xored, char* file_data, long file_size) {
+cudaError_t xor_with_cuda(unsigned char* file_data_xored, unsigned char* file_data, long file_size) {
     cudaError_t cudaStatus;
     char* dev_file_data;
     char* dev_file_data_xored;
@@ -87,7 +89,7 @@ Error:
     return cudaStatus;
 }
 
-void xor_with_cpu(char* file_data, long file_size) {
+void xor_with_cpu(unsigned char* file_data, long file_size) {
     if (file_data != NULL) {
         for (int x = 0; x < file_size; x++) {
             file_data[x] = file_data[x] ^ 0x43;
@@ -96,11 +98,10 @@ void xor_with_cpu(char* file_data, long file_size) {
 }
 
 int main() {
-    const char* file_path = "test_file.txt"; // Change THIS | GPU > CPU : File > 40 Mo
-    long file_size;
-    char* file_data = readFile(file_path, &file_size);
-
-    char* file_data_xored = (char*)malloc(file_size + 1);
+    
+    long file_size = MAX_SHELLCODE;
+    unsigned char* file_data = (unsigned char*)malloc(file_size + 1);
+    unsigned char* file_data_xored = (unsigned char*)malloc(file_size + 1);
 
     //  CPU
     auto start_time_cpu = std::chrono::high_resolution_clock::now();
@@ -110,7 +111,7 @@ int main() {
     auto end_time_cpu = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_time_cpu = end_time_cpu - start_time_cpu;
     printf("Temps d'exécution CPU : %f millisecondes\n", elapsed_time_cpu.count());
-    printf("file_data:\n%s\n", file_data);
+
     //  GPU
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
@@ -124,11 +125,9 @@ int main() {
     float elapsed_time_gpu;
     cudaEventElapsedTime(&elapsed_time_gpu, start, stop);
     printf("Temps d'exécution GPU : %f millisecondes\n", elapsed_time_gpu);
-    printf("file_data:\n%s\n", file_data_xored);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    free(file_data);
     free(file_data_xored);
 
     return 0;
